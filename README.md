@@ -91,44 +91,14 @@ The project follows this general workflow:
 11. Load the saved artifacts in the Streamlit dashboard.
 12. Display analytics and generate predictions from submitted transaction details.
 
-Financial Transaction Dataset
-             |
-             v
-        Data Cleaning
-             |
-             v
- Exploratory Data Analysis
-             |
-             v
-    Feature Engineering
-             |
-             v
- Data Preprocessing and Split
-             |
-             v
-       Model Training
-             |
-             v
-    Model Evaluation
-             |
-             v
- Save Model and Metrics
-             |
-             v
-   Streamlit Dashboard
-             |
-       +-----+-----+
-       |           |
-       v           v
-   Analytics   Predictions
-```
+Financial Transaction Dataset| Data Cleaning| Exploratory Data Analysis| Feature Engineering| Data Preprocessing and Split| Model Training | Model Evaluation | Save Model and Metrics | Streamlit Dashboard| Analytics Predictions
 
 ## Project Structure
 
 The expected project structure is shown below. Adjust the folder names to match your actual VS Code workspace.
 
 Fraud Detection model project 2/
-│
+|
 ├── README.md
 ├── app.py
 │
