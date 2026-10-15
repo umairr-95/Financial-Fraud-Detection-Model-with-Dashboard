@@ -246,11 +246,63 @@ if page == "Executive Dashboard":
 # ------------------------------------------------------------
 elif page == "Dataset Overview":
     st.header("2. Dataset Overview")
-    c1, c2, c3, c4 = st.columns(4)
+    st.write("Review dataset size, data quality, missing values, and column completeness.")
+
+    missing_counts = df.isna().sum()
+    total_missing = int(missing_counts.sum())
+    columns_with_missing = int((missing_counts > 0).sum())
+    total_cells = int(df.shape[0] * df.shape[1])
+    missing_pct = (total_missing / total_cells * 100) if total_cells else 0.0
+
+    c1, c2, c3, c4, c5 = st.columns(5)
     c1.metric("Rows", f"{df.shape[0]:,}")
     c2.metric("Columns", f"{df.shape[1]:,}")
     c3.metric("Duplicate rows", f"{int(df.duplicated().sum()):,}")
-    c4.metric("Cells missing", f"{int(df.isna().sum().sum()):,}")
+    c4.metric("Missing cells", f"{total_missing:,}")
+    c5.metric("Columns with missing", f"{columns_with_missing:,}")
+
+    st.subheader("Missing-value summary")
+    if total_missing == 0:
+        st.success("No missing values were detected in the loaded dataset (0 missing cells across all columns).")
+        st.caption("If you expected missing values, confirm that the app is loading the intended CSV file.")
+    else:
+        st.warning(f"Found {total_missing:,} missing cells ({missing_pct:.2f}% of all dataset cells).")
+        missing_table = pd.DataFrame({
+            "Column": df.columns,
+            "Missing values": missing_counts.values.astype(int),
+            "Missing %": (df.isna().mean().values * 100).round(2),
+            "Non-missing values": df.notna().sum().values.astype(int),
+        })
+        missing_table = missing_table[missing_table["Missing values"] > 0].sort_values(
+            "Missing values", ascending=False
+        )
+        st.dataframe(missing_table, use_container_width=True, hide_index=True)
+
+        st.subheader("Missing values by column")
+        chart_data = missing_table.sort_values("Missing values", ascending=True)
+        fig, ax = plt.subplots(figsize=(10, max(3.5, 0.42 * len(chart_data))))
+        bars = ax.barh(chart_data["Column"].astype(str), chart_data["Missing values"], color="#E45756")
+        ax.set_xlabel("Number of missing cells")
+        ax.set_ylabel("Column")
+        ax.grid(axis="x", alpha=0.25)
+        ax.bar_label(bars, padding=3, fmt="%d")
+        ax.set_xlim(0, max(chart_data["Missing values"].max() * 1.15, 1))
+        fig.tight_layout()
+        st.pyplot(fig, use_container_width=True)
+        plt.close(fig)
+
+        st.subheader("Missing percentage by column")
+        pct_data = missing_table.sort_values("Missing %", ascending=True)
+        fig, ax = plt.subplots(figsize=(10, max(3.5, 0.42 * len(pct_data))))
+        bars = ax.barh(pct_data["Column"].astype(str), pct_data["Missing %"], color="#F2A541")
+        ax.set_xlabel("Missing values (%)")
+        ax.set_ylabel("Column")
+        ax.grid(axis="x", alpha=0.25)
+        ax.bar_label(bars, padding=3, fmt="%.2f%%")
+        ax.set_xlim(0, max(float(pct_data["Missing %"].max()) * 1.15, 1))
+        fig.tight_layout()
+        st.pyplot(fig, use_container_width=True)
+        plt.close(fig)
 
     st.subheader("Column types and completeness")
     overview = pd.DataFrame({
@@ -258,25 +310,23 @@ elif page == "Dataset Overview":
         "Data type": [str(df[c].dtype) for c in df.columns],
         "Missing values": [int(df[c].isna().sum()) for c in df.columns],
         "Missing %": [(df[c].isna().mean() * 100).round(2) for c in df.columns],
+        "Non-missing values": [int(df[c].notna().sum()) for c in df.columns],
         "Unique values": [int(df[c].nunique(dropna=True)) for c in df.columns],
     })
-    st.dataframe(overview, use_container_width=True)
-    st.subheader("Missing values by column")
-    missing = overview.sort_values("Missing values", ascending=False)
-    fig, ax = plt.subplots(figsize=(10, 4))
-    ax.bar(missing["Column"], missing["Missing values"])
-    ax.set_ylabel("Missing cells")
-    ax.tick_params(axis="x", rotation=60)
-    ax.grid(axis="y", alpha=0.25)
-    fig.tight_layout()
-    st.pyplot(fig)
-    plt.close(fig)
+    st.dataframe(overview, use_container_width=True, hide_index=True)
 
     st.subheader("Descriptive statistics")
     st.dataframe(df.describe(include="all").transpose(), use_container_width=True)
     st.subheader("Filter records")
-    selected_cols = st.multiselect("Columns to display", list(df.columns), default=list(df.columns[:min(8, len(df.columns))]))
-    st.dataframe(df[selected_cols].head(500), use_container_width=True)
+    selected_cols = st.multiselect(
+        "Columns to display", list(df.columns),
+        default=list(df.columns[:min(8, len(df.columns))]),
+        key="dataset_overview_columns",
+    )
+    if selected_cols:
+        st.dataframe(df[selected_cols].head(500), use_container_width=True)
+    else:
+        st.info("Select at least one column to display records.")
     add_download_button(df, "Download complete dataset", "dataset_overview.csv")
 
 
@@ -677,190 +727,67 @@ elif page == "Fraud Forecasting":
 
 # ------------------------------------------------------------
 # 12. Graph Analytics
+# ------------------------------------------------------------
 elif page == "Graph Analytics":
+    import networkx as nx
+
     st.header("12. Graph Analytics")
-    st.write("Explore connections between entities in the transaction dataset.")
-    st.caption(
-        "Connections show associations in the available data; they do not prove fraud."
-    )
+    st.subheader("Customer–Transaction Connection Network")
 
-    entity_candidates = [
-        c for c in [
-            "Customer_ID",
-            "Location",
-            "Merchant_Category",
-            "Payment_Method",
-            "Device_Type",
-        ]
-        if c in df.columns
-    ]
-
-    if len(entity_candidates) < 2:
-        st.warning(
-            "Graph Analytics needs at least two available entity columns. "
-            f"Available columns: {', '.join(map(str, df.columns))}"
-        )
+    if df.empty:
+        st.error("The transaction dataset is empty or was not loaded.")
     else:
-        source_col = st.selectbox(
-            "First node type",
-            entity_candidates,
-            index=0,
-            key="graph_source_col",
-        )
-        remaining = [c for c in entity_candidates if c != source_col]
-        target_col = st.selectbox(
-            "Connected node type",
-            remaining,
-            index=0,
-            key="graph_target_col",
-        )
+        required_columns = ["Customer_ID", "Transaction_ID"]
+        missing_columns = [col for col in required_columns if col not in df.columns]
 
-        if source_col == target_col:
-            st.warning("Choose two different node types to build the network.")
+        if missing_columns:
+            st.error(f"Required columns are missing: {', '.join(missing_columns)}")
+            st.caption("Available columns: " + ", ".join(map(str, df.columns)))
         else:
-            max_rows_available = max(1, min(5000, len(df)))
-            default_rows = min(1000, max_rows_available)
-            max_rows = st.slider(
-                "Transaction rows to analyse",
-                min_value=1,
-                max_value=max_rows_available,
-                value=default_rows,
-                key="graph_max_rows",
+            graph_data = df[required_columns].dropna().head(500)
+            G = nx.from_pandas_edgelist(
+                graph_data,
+                source="Customer_ID",
+                target="Transaction_ID",
             )
 
-            graph_columns = [source_col, target_col]
-            if TARGET in df.columns:
-                graph_columns.append(TARGET)
-
-            graph_df = df[graph_columns].dropna(subset=[source_col, target_col]).head(max_rows).copy()
-            graph_df[source_col] = graph_df[source_col].astype(str)
-            graph_df[target_col] = graph_df[target_col].astype(str)
-
-            if graph_df.empty:
-                st.warning("No usable connections were found for these columns.")
+            if G.number_of_nodes() == 0:
+                st.warning("No customer–transaction connections were found in the available rows.")
             else:
-                if TARGET in graph_df.columns:
-                    edge_summary = (
-                        graph_df.groupby([source_col, target_col], as_index=False)
-                        .agg(
-                            Transactions=(source_col, "size"),
-                            Fraud_cases=(TARGET, lambda values: int((values == 1).sum())),
-                        )
-                        .sort_values("Transactions", ascending=False)
-                    )
-                else:
-                    edge_summary = (
-                        graph_df.groupby([source_col, target_col], as_index=False)
-                        .size()
-                        .rename(columns={"size": "Transactions"})
-                        .sort_values("Transactions", ascending=False)
-                    )
-                    edge_summary["Fraud_cases"] = 0
+                metric1, metric2 = st.columns(2)
+                metric1.metric("Nodes", f"{G.number_of_nodes():,}")
+                metric2.metric("Connections", f"{G.number_of_edges():,}")
 
-                st.subheader("Connection summary")
-                col1, col2, col3 = st.columns(3)
-                col1.metric("Unique connections", len(edge_summary))
-                col2.metric("Source entities", graph_df[source_col].nunique())
-                col3.metric("Connected entities", graph_df[target_col].nunique())
+                node_limit = min(100, G.number_of_nodes())
+                default_nodes = min(30, node_limit)
+                max_nodes = st.slider(
+                    "Nodes to display",
+                    min_value=min(2, node_limit),
+                    max_value=node_limit,
+                    value=max(2, default_nodes) if node_limit >= 2 else 1,
+                ) if node_limit >= 2 else 1
 
-                st.subheader("Most frequent connections")
-                st.dataframe(edge_summary.head(30), use_container_width=True)
-
-                st.subheader("Connection network")
-                try:
-                    import networkx as nx
-
-                    max_edges = st.slider(
-                        "Connections to display",
-                        min_value=5,
-                        max_value=max(5, min(60, len(edge_summary))),
-                        value=min(20, max(5, len(edge_summary))),
-                        key="graph_max_edges",
-                    )
-
-                    display_edges = edge_summary.head(max_edges)
-                    G = nx.Graph()
-
-                    for _, row in display_edges.iterrows():
-                        source_node = f"{source_col}: {row[source_col]}"
-                        target_node = f"{target_col}: {row[target_col]}"
-                        G.add_edge(
-                            source_node,
-                            target_node,
-                            weight=int(row["Transactions"]),
-                            fraud=int(row["Fraud_cases"]),
-                        )
-
-                    if G.number_of_nodes() == 0 or G.number_of_edges() == 0:
-                        st.info("There are not enough connections to draw a network.")
-                    else:
-                        fig, ax = plt.subplots(figsize=(14, 9))
-                        pos = nx.spring_layout(
-                            G,
-                            k=1.4 / max(1, G.number_of_nodes() ** 0.5) * 5,
-                            iterations=150,
-                            seed=42,
-                            weight="weight",
-                        )
-
-                        edge_widths = [
-                            0.7 + min(2.5, G[u][v]["weight"] * 0.25)
-                            for u, v in G.edges()
-                        ]
-                        nx.draw_networkx_edges(
-                            G,
-                            pos,
-                            ax=ax,
-                            edge_color="#94A3B8",
-                            alpha=0.45,
-                            width=edge_widths,
-                        )
-                        nx.draw_networkx_nodes(
-                            G,
-                            pos,
-                            ax=ax,
-                            node_size=420,
-                            node_color="#3B82F6",
-                            edgecolors="white",
-                            linewidths=0.8,
-                        )
-
-                        # Keep the chart readable: show labels only on smaller networks.
-                        if G.number_of_nodes() <= 25:
-                            nx.draw_networkx_labels(
-                                G,
-                                pos,
-                                ax=ax,
-                                font_size=7,
-                                font_color="#111827",
-                            )
-
-                        ax.set_title(
-                            f"{source_col} ↔ {target_col} connection network",
-                            pad=14,
-                        )
-                        ax.axis("off")
-                        fig.tight_layout()
-                        st.pyplot(fig, use_container_width=True)
-                        plt.close(fig)
-
-                        if G.number_of_nodes() > 25:
-                            st.caption(
-                                "Labels are hidden because the network is large. "
-                                "Reduce the number of connections to inspect a smaller network."
-                            )
-
-                except ImportError:
-                    st.info(
-                        "Install NetworkX to display the connection network: "
-                        "python -m pip install networkx"
-                    )
-
-                add_download_button(
-                    edge_summary,
-                    "Download graph connection summary",
-                    "graph_edges.csv",
+                selected_nodes = list(G.nodes())[:max_nodes]
+                H = G.subgraph(selected_nodes).copy()
+                fig, ax = plt.subplots(figsize=(12, 7))
+                pos = nx.spring_layout(H, k=1.2, iterations=60, seed=42)
+                nx.draw_networkx(
+                    H,
+                    pos,
+                    ax=ax,
+                    with_labels=False,
+                    node_size=180,
+                    node_color="#3B82F6",
+                    edge_color="gray",
+                    alpha=0.8,
+                    width=0.7,
                 )
+                ax.set_title("Customer–Transaction Network")
+                ax.axis("off")
+                fig.tight_layout()
+                st.pyplot(fig, use_container_width=True)
+                plt.close(fig)
+                st.caption("For readability, the network uses up to 500 transaction links and displays the selected number of nodes.")
 
 # ------------------------------------------------------------
 # Footer
