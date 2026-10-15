@@ -677,61 +677,190 @@ elif page == "Fraud Forecasting":
 
 # ------------------------------------------------------------
 # 12. Graph Analytics
-# ------------------------------------------------------------
 elif page == "Graph Analytics":
     st.header("12. Graph Analytics")
-    st.write("Explore links between transactions and entities where identifiers are available.")
-    st.caption("A graph shows associations in this dataset; a connection alone does not establish fraud or collusion.")
+    st.write("Explore connections between entities in the transaction dataset.")
+    st.caption(
+        "Connections show associations in the available data; they do not prove fraud."
+    )
 
-    entity_candidates = [c for c in ["Customer_ID", "Location", "Merchant_Category", "Payment_Method", "Device_Type"] if c in df.columns]
+    entity_candidates = [
+        c for c in [
+            "Customer_ID",
+            "Location",
+            "Merchant_Category",
+            "Payment_Method",
+            "Device_Type",
+        ]
+        if c in df.columns
+    ]
+
     if len(entity_candidates) < 2:
-        st.warning("Graph analytics needs at least two usable entity/category columns.")
+        st.warning(
+            "Graph Analytics needs at least two available entity columns. "
+            f"Available columns: {', '.join(map(str, df.columns))}"
+        )
     else:
-        source_col = st.selectbox("First node type", entity_candidates, index=0)
+        source_col = st.selectbox(
+            "First node type",
+            entity_candidates,
+            index=0,
+            key="graph_source_col",
+        )
         remaining = [c for c in entity_candidates if c != source_col]
-        target_col = st.selectbox("Connected node type", remaining, index=0)
-        max_rows = st.slider("Rows to include", 100, min(5000, max(100, len(df))), min(1000, max(100, len(df))))
-        graph_df = df[[source_col, target_col, TARGET]].dropna().head(max_rows).copy()
-        graph_df[source_col] = graph_df[source_col].astype(str)
-        graph_df[target_col] = graph_df[target_col].astype(str)
-
-        edge_summary = graph_df.groupby([source_col, target_col], as_index=False).agg(
-            Transactions=(TARGET, "size"),
-            Fraud_cases=(TARGET, lambda s: (s == 1).sum())
-        ).sort_values("Transactions", ascending=False)
-
-        st.subheader("Most frequent connections")
-        st.dataframe(edge_summary.head(30), use_container_width=True)
-        st.subheader("Top connection counts")
-        st.bar_chart(
-            edge_summary.head(15).set_index(source_col)["Transactions"]
+        target_col = st.selectbox(
+            "Connected node type",
+            remaining,
+            index=0,
+            key="graph_target_col",
         )
 
-        st.subheader("Connection network preview")
-        try:
-            import networkx as nx
-            G = nx.Graph()
-            for _, row in edge_summary.head(40).iterrows():
-                a = f"{source_col}: {row[source_col]}"
-                b = f"{target_col}: {row[target_col]}"
-                G.add_edge(a, b, weight=int(row["Transactions"]), fraud=int(row["Fraud_cases"]))
-            if G.number_of_nodes() > 0:
-                fig, ax = plt.subplots(figsize=(12, 8))
-                pos = nx.spring_layout(G, seed=42)
-                node_sizes = [300 + 100 * G.degree(node) for node in G.nodes()]
-                nx.draw_networkx(
-                    G, pos=pos, ax=ax, with_labels=True,
-                    node_size=node_sizes, font_size=7, width=1.2
+        if source_col == target_col:
+            st.warning("Choose two different node types to build the network.")
+        else:
+            max_rows_available = max(1, min(5000, len(df)))
+            default_rows = min(1000, max_rows_available)
+            max_rows = st.slider(
+                "Transaction rows to analyse",
+                min_value=1,
+                max_value=max_rows_available,
+                value=default_rows,
+                key="graph_max_rows",
+            )
+
+            graph_columns = [source_col, target_col]
+            if TARGET in df.columns:
+                graph_columns.append(TARGET)
+
+            graph_df = df[graph_columns].dropna(subset=[source_col, target_col]).head(max_rows).copy()
+            graph_df[source_col] = graph_df[source_col].astype(str)
+            graph_df[target_col] = graph_df[target_col].astype(str)
+
+            if graph_df.empty:
+                st.warning("No usable connections were found for these columns.")
+            else:
+                if TARGET in graph_df.columns:
+                    edge_summary = (
+                        graph_df.groupby([source_col, target_col], as_index=False)
+                        .agg(
+                            Transactions=(source_col, "size"),
+                            Fraud_cases=(TARGET, lambda values: int((values == 1).sum())),
+                        )
+                        .sort_values("Transactions", ascending=False)
+                    )
+                else:
+                    edge_summary = (
+                        graph_df.groupby([source_col, target_col], as_index=False)
+                        .size()
+                        .rename(columns={"size": "Transactions"})
+                        .sort_values("Transactions", ascending=False)
+                    )
+                    edge_summary["Fraud_cases"] = 0
+
+                st.subheader("Connection summary")
+                col1, col2, col3 = st.columns(3)
+                col1.metric("Unique connections", len(edge_summary))
+                col2.metric("Source entities", graph_df[source_col].nunique())
+                col3.metric("Connected entities", graph_df[target_col].nunique())
+
+                st.subheader("Most frequent connections")
+                st.dataframe(edge_summary.head(30), use_container_width=True)
+
+                st.subheader("Connection network")
+                try:
+                    import networkx as nx
+
+                    max_edges = st.slider(
+                        "Connections to display",
+                        min_value=5,
+                        max_value=max(5, min(60, len(edge_summary))),
+                        value=min(20, max(5, len(edge_summary))),
+                        key="graph_max_edges",
+                    )
+
+                    display_edges = edge_summary.head(max_edges)
+                    G = nx.Graph()
+
+                    for _, row in display_edges.iterrows():
+                        source_node = f"{source_col}: {row[source_col]}"
+                        target_node = f"{target_col}: {row[target_col]}"
+                        G.add_edge(
+                            source_node,
+                            target_node,
+                            weight=int(row["Transactions"]),
+                            fraud=int(row["Fraud_cases"]),
+                        )
+
+                    if G.number_of_nodes() == 0 or G.number_of_edges() == 0:
+                        st.info("There are not enough connections to draw a network.")
+                    else:
+                        fig, ax = plt.subplots(figsize=(14, 9))
+                        pos = nx.spring_layout(
+                            G,
+                            k=1.4 / max(1, G.number_of_nodes() ** 0.5) * 5,
+                            iterations=150,
+                            seed=42,
+                            weight="weight",
+                        )
+
+                        edge_widths = [
+                            0.7 + min(2.5, G[u][v]["weight"] * 0.25)
+                            for u, v in G.edges()
+                        ]
+                        nx.draw_networkx_edges(
+                            G,
+                            pos,
+                            ax=ax,
+                            edge_color="#94A3B8",
+                            alpha=0.45,
+                            width=edge_widths,
+                        )
+                        nx.draw_networkx_nodes(
+                            G,
+                            pos,
+                            ax=ax,
+                            node_size=420,
+                            node_color="#3B82F6",
+                            edgecolors="white",
+                            linewidths=0.8,
+                        )
+
+                        # Keep the chart readable: show labels only on smaller networks.
+                        if G.number_of_nodes() <= 25:
+                            nx.draw_networkx_labels(
+                                G,
+                                pos,
+                                ax=ax,
+                                font_size=7,
+                                font_color="#111827",
+                            )
+
+                        ax.set_title(
+                            f"{source_col} ↔ {target_col} connection network",
+                            pad=14,
+                        )
+                        ax.axis("off")
+                        fig.tight_layout()
+                        st.pyplot(fig, use_container_width=True)
+                        plt.close(fig)
+
+                        if G.number_of_nodes() > 25:
+                            st.caption(
+                                "Labels are hidden because the network is large. "
+                                "Reduce the number of connections to inspect a smaller network."
+                            )
+
+                except ImportError:
+                    st.info(
+                        "Install NetworkX to display the connection network: "
+                        "python -m pip install networkx"
+                    )
+
+                add_download_button(
+                    edge_summary,
+                    "Download graph connection summary",
+                    "graph_edges.csv",
                 )
-                ax.axis("off")
-                fig.tight_layout()
-                st.pyplot(fig)
-                plt.close(fig)
-        except ImportError:
-            st.info("Install networkx to show the network plot: python -m pip install networkx")
-
-        add_download_button(edge_summary, "Download graph edge summary", "graph_edges.csv")
-
 
 # ------------------------------------------------------------
 # Footer
